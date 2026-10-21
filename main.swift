@@ -26,7 +26,17 @@ if CommandLine.arguments.contains("--selftest") {
 var dx: CGFloat = 0, dy: CGFloat = 0, fired = false
 var tap: CFMachPort?
 
+// Launched from Finder there is no terminal, so status goes to ~/Library/Logs/SafariSwipe.log.
+func log(_ s: String) {
+    print(s)
+    let url = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/SafariSwipe.log")
+    let line = Data("\(Date()) \(s)\n".utf8)
+    if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(line); h.closeFile() }
+    else { try? line.write(to: url) }
+}
+
 func send(_ nav: Nav) {
+    log("\(nav) (accessibility trusted: \(AXIsProcessTrusted()))")
     // shortcut: virtual key codes are US-layout positions of [ and ]; remap if your layout differs.
     let key: CGKeyCode = nav == .back ? 0x21 : 0x1E
     for down in [true, false] {
@@ -41,8 +51,7 @@ let callback: CGEventTapCallBack = { _, type, event, _ in
         if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
         return Unmanaged.passUnretained(event)
     }
-    guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.Safari",
-          let ns = NSEvent(cgEvent: event), ns.hasPreciseScrollingDeltas,
+    guard let ns = NSEvent(cgEvent: event), ns.hasPreciseScrollingDeltas,
           ns.momentumPhase.isEmpty  // ignore inertia after lift-off
     else { return Unmanaged.passUnretained(event) }
 
@@ -50,18 +59,29 @@ let callback: CGEventTapCallBack = { _, type, event, _ in
     // Normalise to finger direction regardless of the natural-scrolling setting.
     dx += ns.isDirectionInvertedFromDevice ? ns.scrollingDeltaX : -ns.scrollingDeltaX
     dy += ns.scrollingDeltaY
-    if !fired, let nav = decide(dx: dx, dy: dy) { fired = true; send(nav) }
+    let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    if front == "com.apple.Safari", !fired, let nav = decide(dx: dx, dy: dy) { fired = true; send(nav) }
+    if ns.phase.contains(.ended), abs(dx) > abs(dy) {
+        log("sideways gesture dx=\(Int(dx)) dy=\(Int(dy)) front=\(front ?? "?") fired=\(fired)")
+    }
     return Unmanaged.passUnretained(event)
 }
 
-// Prompts for Accessibility access on first run (needed to read gestures and send keys).
-let trusted = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-if !trusted { print("Grant Accessibility access to SafariSwipe, then relaunch it.") }
+// Accessibility is needed to send the keystrokes. The system prompt only appears once per app,
+// so if we're not trusted also open the settings page and wait for the switch to be flipped.
+log("started, accessibility trusted: \(AXIsProcessTrusted())")
+if !AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) {
+    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
+        if AXIsProcessTrusted() { log("accessibility granted"); t.invalidate() }
+    }
+}
 
 tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly,
                         eventsOfInterest: 1 << CGEventType.scrollWheel.rawValue,
                         callback: callback, userInfo: nil)
-guard let tap else { print("Could not create event tap (Accessibility not granted?)"); exit(1) }
+guard let tap else { log("could not create event tap"); exit(1) }
+log("event tap ready")
 CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
 CGEvent.tapEnable(tap: tap, enable: true)
 
