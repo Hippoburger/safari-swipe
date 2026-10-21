@@ -5,6 +5,7 @@
     <key>CFBundleIdentifier</key><string>local.biye.SafariSwipe</string>
     <key>CFBundleName</key><string>SafariSwipe</string>
     <key>CFBundleExecutable</key><string>SafariSwipe</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>LSUIElement</key><true/>
